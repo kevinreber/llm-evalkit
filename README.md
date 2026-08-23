@@ -24,6 +24,37 @@ That origin is why the interfaces look the way they do. The three suites disagre
 
 A framework built around `(prompt) -> str` and `expected == actual` serves one of those three.
 
+## Why not Braintrust, LangSmith, or promptfoo?
+
+Fair question, and the honest answer is **use them for the suite that fits**. This is not a claim that the incumbents are bad; it is a claim about shape, and it was measured rather than assumed.
+
+The extraction suite was ported to Braintrust before this package went any further. It reproduced the hand-rolled scorecard almost exactly — 25 real cases against the live API in 60 seconds:
+
+| Field | Braintrust port | hand-rolled runner |
+|---|---|---|
+| kind | 88.0% | 88% |
+| price_tier | 88.0% | 88% |
+| duration | 96.0% | 100% |
+| locations | 73.8% | 73% |
+| activities | 90.8% | 89.8% |
+| season_months | 89.9% | 89.9% |
+| **overall** | **87.7%** | **88.1%** |
+| inventions | 3 | 3 |
+
+Every gap is inside the ±1-field run-to-run wobble that suite already documents. For a conventional eval, a hosted platform wins on the thing that matters most — clicking into a failing example and diffing two runs is where eval insight actually comes from, and this package will not beat that.
+
+Then the same port was attempted for the ranking suite, which asserts *relative ordering over a whole result set* ("A outranks B", "X is filtered out", "this reference's best window lands in October"), and where the assertions differ from case to case. Across 16 cases and 10 check kinds, **only 25% of the scorer/row grid was applicable** — 120 of 160 cells not-applicable, with three metrics computed from a single case each. A mean over n=1 is not a metric.
+
+To be precise about what did *not* go wrong: Braintrust handles `None` from a scorer correctly, so not-applicable is respected rather than counted as zero. The issue is not correctness. It is that a platform which names its scorers once for the whole dataset and means them has no natural home for "this case is red, and here is the design decision you broke."
+
+So the split is:
+
+- **Conventional evals** — one prompt, one response, compare to an answer: use a hosted platform. You will get a better UI than this for free.
+- **Deterministic, relational, or unlabeled suites** — property-based regression tests over a ranker, or scorecards over artifacts harvested from production: those are what this is for.
+- **Data you would rather not egress** — harvested production traffic with real user content is a decision, not a shrug.
+
+One thing found in the process, which is its own argument: porting the eval forced it to run against the real API with a key present, and that surfaced two live bugs in the consuming project — an unpinned SDK that would have broken ingest on the next deploy, and an eval that had been silently scoring a heuristic fallback and reporting it as a real number. An eval that cannot tell *"the model got worse"* from *"I never called the model"* is worse than no eval, because it answers with a number either way. Most of the design decisions below exist to make that class of failure impossible.
+
 ## How it works
 
 ```mermaid
@@ -112,12 +143,29 @@ evalkit datasets evals/extraction/cases
 | Phase | Contents | State |
 |---|---|---|
 | 1 | `dataset.py`, `runner.py`, `tasks.py` | done |
-| 1 (cont.) | retry with backoff on 429/5xx, pre-flight cost estimation with confirm-on-threshold | next |
-| 2 | evaluator protocol, exact / regex / LLM-judge / embedding, **bootstrap confidence intervals**, judge position-bias measurement | |
+| 2 | evaluator protocol + `Score`, **bootstrap confidence intervals**, aggregation | done |
+| 2 (cont.) | exact / regex / LLM-judge / embedding evaluators, judge position-bias measurement | next |
+| 1 (cont.) | retry with backoff on 429/5xx, pre-flight cost estimation with confirm-on-threshold | |
 | 3 | `Store` protocol + SQLite, regression detection, refuse cross-fingerprint comparison | |
 | 4 | W&B runs, `run` / `compare` / `report` / `datasets` CLI, Jinja2 HTML report, PyPI `0.1.0` | |
 
 The non-negotiable one is bootstrap CI. Without it an eval score is noise dressed as signal: 73% against 71% on 100 examples is meaningless when the 95% interval is `[68%, 80%]` for both.
+
+That is not hypothetical here. Running Navi's real 25-case extraction suite through this package reproduces its recorded scorecard exactly — and attaches the interval its hand-rolled runner never could:
+
+```
+  activities        87.9%   CI [0.820, 0.933]
+  locations         74.7%   CI [0.621, 0.855]
+  ...
+  overall           88.1%   CI [0.838, 0.921]
+  inventions           2
+```
+
+The interval is **8.3 percentage points wide**. So the 88.1% recorded a month earlier and the 87.7% measured on a different SDK version are not two results — they are the same result twice, and no amount of staring at the decimals would have said so.
+
+### Known limitation: usage is invisible through a wrapped task
+
+The task seam is what lets a domain function keep its own prompt, but the cost of that is that the framework cannot see inside it. A task that calls `anthropic_task` reports tokens and cost; a task that calls *your* function, which calls a model internally, reports none — the run above shows `$0.0000` despite spending real money inside Navi's normalizer. That is honest rather than wrong (no usage was reported to it, so it claims none), but it means pre-flight cost estimation will only cover tasks the framework itself issues.
 
 ## Development
 
