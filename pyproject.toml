@@ -1,0 +1,71 @@
+[project]
+name = "llm-evalkit"
+version = "0.1.0.dev0"
+description = "Evaluate LLM outputs at scale: fingerprinted datasets, an async batch runner, pluggable evaluators, bootstrap confidence intervals, and regression detection."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Kevin Reber" }]
+keywords = ["llm", "eval", "evaluation", "anthropic", "claude", "benchmark"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "anthropic>=0.40",
+    "pydantic>=2.9",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "click>=8.1",
+    "jinja2>=3.1",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+# Kept out of the core install deliberately. A library's adoption cost has to
+# stay near zero (career-010): `pip install llm-evalkit` should not drag in a
+# telemetry client or a structured-output retry layer that a mechanical,
+# offline suite will never call.
+wandb = ["wandb>=0.18"]
+judge = ["instructor>=1.7"]
+
+[project.urls]
+Homepage = "https://github.com/kevinreber/llm-evalkit"
+Repository = "https://github.com/kevinreber/llm-evalkit"
+
+[project.scripts]
+# NOT `eval`: that is a shell builtin in bash and zsh, so `eval run --dataset x`
+# is swallowed by the shell instead of reaching this package.
+evalkit = "llm_evalkit.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/llm_evalkit"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q"
