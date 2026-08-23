@@ -47,6 +47,11 @@ def extract_text(content: Any) -> str:
         return content
     if content is None:
         return ""
+    # A single bare block rather than a list of them. Without this, iterating a dict
+    # walks its KEYS, every lookup misses, and the function returns "" — an eval would
+    # then score a real answer as a wrong one instead of surfacing a shape mismatch.
+    if isinstance(content, Mapping):
+        content = [content]
     parts: list[str] = []
     for block in content:
         text = getattr(block, "text", None)
@@ -111,16 +116,25 @@ def anthropic_task(
 
         response = await client.messages.create(**request)
 
+        served = getattr(response, "model", None) or model
         raw_usage = getattr(response, "usage", None)
         input_tokens = int(getattr(raw_usage, "input_tokens", 0) or 0)
         output_tokens = int(getattr(raw_usage, "output_tokens", 0) or 0)
-        served = getattr(response, "model", None) or model
+
+        # No usage on the response means the token counts are unknown, so the cost is
+        # unknown too. Pricing zero tokens would report a confident $0.00 for a call
+        # that certainly cost something — the same free-versus-unknown collapse this
+        # package refuses everywhere else.
         price = prices.get(served) or prices.get(model)
+        if raw_usage is None or price is None:
+            cost: float | None = None
+        else:
+            cost = price.cost(input_tokens, output_tokens)
 
         usage = Usage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            cost_usd=price.cost(input_tokens, output_tokens) if price else None,
+            cost_usd=cost,
             model=served,
         )
         return Metered(value=extract_text(getattr(response, "content", None)), usage=usage)

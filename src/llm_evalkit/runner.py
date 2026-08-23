@@ -228,6 +228,13 @@ async def run(
     for example, item in zip(examples, gathered, strict=True):
         if isinstance(item, RunResult):
             results.append(item)
+        elif isinstance(item, asyncio.CancelledError):
+            # Cancellation voids the run; it is not a per-example failure. gather()
+            # with return_exceptions=True hands CancelledError back like any other
+            # exception, and recording it would turn a Ctrl-C at example 200 of 500
+            # into a complete-looking Run with 300 "errors" — a number someone could
+            # then store as a baseline.
+            raise item
         else:
             results.append(RunResult(example=example, error=item))
 

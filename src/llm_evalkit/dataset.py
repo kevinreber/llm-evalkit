@@ -73,6 +73,17 @@ class DatasetError(ValueError):
     """A dataset failed to load. Always names the file, and the line for JSONL."""
 
 
+def _first_present(*values: Any) -> Any:
+    """The first value that is neither ``None`` nor an empty string.
+
+    Deliberately not ``or``: ``0`` and ``False`` are legitimate values here.
+    """
+    for value in values:
+        if value is not None and value != "":
+            return value
+    return None
+
+
 class Example(BaseModel):
     """One case.
 
@@ -122,7 +133,11 @@ def default_adapter(raw: Any, source: Path, index: int | None = None) -> Example
 
     stem = source.name[: -len(DRAFT_SUFFIX)] if source.name.endswith(DRAFT_SUFFIX) else source.stem
     fallback = stem if index is None else f"{stem}#{index}"
-    ident = str(raw.get("id") or raw.get("name") or fallback)
+    # Absent means None or empty string, NOT falsy. A generated dataset numbering its
+    # rows from zero has a perfectly good id in `{"id": 0}`, and `or` would throw it
+    # away and silently rename that one row to the filename while its siblings kept
+    # their numbers.
+    ident = str(_first_present(raw.get("id"), raw.get("name"), fallback))
 
     if "input" in raw:
         payload: Any = raw["input"]
@@ -331,7 +346,14 @@ def load_dir(
     if not root.is_dir():
         raise DatasetError(f"No such dataset directory: {root}")
 
-    skip = exclude or (lambda p: not include_drafts and p.name.endswith(DRAFT_SUFFIX))
+    def skip(candidate: Path) -> bool:
+        # Draft exclusion COMPOSES with a custom filter rather than being replaced by
+        # one. Drafts-do-not-score is a safety property: a caller who passes `exclude`
+        # to skip a naming prefix must not silently start scoring the model's own
+        # uncorrected output as gold.
+        if not include_drafts and candidate.name.endswith(DRAFT_SUFFIX):
+            return True
+        return bool(exclude(candidate)) if exclude is not None else False
 
     examples: list[Example] = []
     for file in sorted(root.glob(pattern)):
@@ -342,11 +364,15 @@ def load_dir(
         except json.JSONDecodeError as exc:
             raise DatasetError(f"{file}: invalid JSON — {exc.msg} (line {exc.lineno})") from exc
 
+        # An array file ALWAYS produces indexed ids, even when it currently holds one
+        # record. Keying off the current length instead would re-id every example in
+        # the file the moment a second record was harvested into it, and Phase 3's
+        # "examples that fail across every run" query addresses examples by id.
         records = raw if isinstance(raw, list) else [raw]
-        multiple = len(records) > 1
+        indexed = isinstance(raw, list)
         for index, record in enumerate(records):
             try:
-                example = adapter(record, file, index if multiple else None)
+                example = adapter(record, file, index if indexed else None)
             except ValidationError as exc:
                 raise DatasetError(f"{file}: invalid example at index {index} — {exc}") from exc
             attachments = _resolve_attachments(record, file, attachment_keys)
