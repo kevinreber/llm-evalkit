@@ -212,6 +212,13 @@ class PositionBias:
     # :func:`measure_self_consistency`.
     noise_floor: float | None = None
 
+    # Per-pair outcomes, so a caller can put a confidence interval on either rate.
+    # Both are proportions estimated from a modest number of pairs, and quoting a
+    # figure like "31.2%" without its interval is precisely the error this class
+    # exists to prevent.
+    swap_flips: tuple[bool, ...] = ()
+    control_flips: tuple[bool, ...] = ()
+
     @property
     def disagreement_rate(self) -> float:
         """Share of pairs whose verdict flipped when the order was swapped.
@@ -280,6 +287,17 @@ async def measure_self_consistency(
     the same pairs returned 25.0% on one run and 0.0% on the next — the naive
     reading of either would have been wrong in a different direction.
     """
+    flips = await _self_consistency_flips(caller, pairs, concurrency=concurrency)
+    return sum(flips) / len(flips) if flips else 0.0
+
+
+async def _self_consistency_flips(
+    caller: StructuredCaller,
+    pairs: Sequence[tuple[str, str, str]],
+    *,
+    concurrency: int = 4,
+) -> list[bool]:
+    """Per-pair self-disagreement, kept so a caller can interval it."""
     semaphore = asyncio.Semaphore(concurrency)
 
     async def one(request: str, a: str, b: str) -> bool:
@@ -291,8 +309,7 @@ async def measure_self_consistency(
             )
             return first.winner != second.winner
 
-    flips = await asyncio.gather(*(one(r, a, b) for r, a, b in pairs))
-    return sum(flips) / len(flips) if flips else 0.0
+    return list(await asyncio.gather(*(one(r, a, b) for r, a, b in pairs)))
 
 
 async def measure_position_bias(
@@ -325,8 +342,10 @@ async def measure_position_bias(
     results = await asyncio.gather(*(one(r, a, b) for r, a, b in pairs))
 
     disagreements = prefers_first = prefers_second = ties = 0
+    swap_flips: list[bool] = []
     for forward, reverse in results:
         flipped = {"A": "B", "B": "A", "tie": "tie"}[reverse.winner]
+        swap_flips.append(forward.winner != flipped)
         if forward.winner != flipped:
             disagreements += 1
         # Slot preference counts every presentation, both orders, so it measures
@@ -339,9 +358,11 @@ async def measure_position_bias(
             else:
                 ties += 1
 
-    floor = (
-        await measure_self_consistency(caller, pairs, concurrency=concurrency) if control else None
-    )
+    control_flips: list[bool] = []
+    floor: float | None = None
+    if control:
+        control_flips = await _self_consistency_flips(caller, pairs, concurrency=concurrency)
+        floor = sum(control_flips) / len(control_flips) if control_flips else 0.0
 
     return PositionBias(
         n_pairs=len(pairs),
@@ -350,4 +371,6 @@ async def measure_position_bias(
         prefers_second=prefers_second,
         ties=ties,
         noise_floor=floor,
+        swap_flips=tuple(swap_flips),
+        control_flips=tuple(control_flips),
     )
