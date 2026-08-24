@@ -165,25 +165,28 @@ The interval is **8.3 percentage points wide**. So the 88.1% recorded a month ea
 
 ### Measured: LLM-judge position bias, and why the usual measurement is wrong
 
-The standard advice is to measure a judge's position bias by presenting each pair as (A, B) and again as (B, A), then counting flips. Run against **claude-sonnet-5** on 16 deliberately near-tied pairs, that gave:
+The standard advice is to measure a judge's position bias by presenting each pair as (A, B) and again as (B, A), then counting flips. Reproduce it with `uv run python scripts/measure_bias.py` — 50 pairs against **claude-sonnet-5**, 40 deliberately near-tied and 10 deliberately lopsided:
 
 ```
-  DISAGREEMENT RATE           25.0%      <- first run
-  DISAGREEMENT RATE            0.0%      <- second run, identical experiment
+  swap disagreement           28.0%   CI [0.160, 0.400]
+  same-order noise floor      16.0%   CI [0.080, 0.260]
+  ----------------------------------------------------
+  excess (position bias)     +12.0%   CI [-0.020, +0.240]  (includes 0)
 ```
 
-The same experiment produced 25% and then 0%. Neither number means anything, and the reason is the control almost nobody runs — judging the **same pair in the same order twice**:
+Three things come out of that, and the naive version of this experiment gets all three wrong.
 
-```
-  CONTROL: same order twice   31.2%      <- nondeterminism floor
-  excess attributable to slot     ~0%
-```
+**The raw 28% is not position bias.** Judging the *same pair in the same order twice* — the control almost nobody runs — flips 16% of the time. The judge is simply nondeterministic, so more than half the "flipped when we swapped" verdicts were never about position at all.
 
-The judge disagrees with *itself* about a third of the time on near-tied pairs. So the swap-disagreement never exceeds the noise floor, and on this judge and these pairs there is **no detectable position bias** — the naive measurement would have reported 25% of one and been wrong.
+**The residue is not significant either.** The excess is +12%, and because both rates come from the same pairs the honest test is a bootstrap over *paired per-pair differences*, not a glance at whether the two marginal intervals overlap. That interval is `[-0.020, +0.240]` and it **includes zero**. So position bias is not detectable at n=50. The point estimate is suggestive and a larger pair set might resolve it; claiming 12% today would be reporting noise as a finding.
+
+**The judge is fine when the answer is clear.** On the 10 lopsided pairs — where one response is plainly wrong — swap disagreement and the noise floor are both exactly **0.0%**. All of the instability lives on genuine near-ties, which is arguably correct behaviour rather than a defect: the judge is unstable precisely where the right answer is "these are equivalent."
+
+An earlier 16-pair run gave 25.0% then 0.0% on the identical experiment, which is what motivated adding the control and the intervals in the first place.
 
 Which raises the obvious fix, temperature 0. That is no longer available: `anthropic` 1.0.0 removed `temperature` from the typed signature of both `messages.create()` and `messages.parse()`, and the API answers `400 — temperature is deprecated for this model` for newer models including claude-sonnet-5. Routing it through `extra_body` reaches the wire and gets the same 400.
 
-So `measure_position_bias()` runs the control **by default**, `PositionBias.excess_over_noise` is the number to read, and an uncontrolled measurement prints `UNCONTROLLED — not interpretable on its own` rather than a figure someone might quote. A measurement that looks rigorous while being confounded is worse than no measurement.
+So `measure_position_bias()` runs the control **by default**, `PositionBias.excess_over_noise` is the number to read, per-pair outcomes are kept on `swap_flips` / `control_flips` so the excess can be intervalled, and an uncontrolled measurement prints `UNCONTROLLED — not interpretable on its own` rather than a figure someone might quote. A measurement that looks rigorous while being confounded is worse than no measurement.
 
 ### Known limitation: usage is invisible through a wrapped task
 
