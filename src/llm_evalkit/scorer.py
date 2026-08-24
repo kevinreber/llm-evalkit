@@ -23,13 +23,17 @@ fully deterministic, where the bootstrap is *only* the dataset-sampling question
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import statistics
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
 from .evaluators.base import Aggregation, Component, Score, components_by_name
+from .runner import Run
 
 __all__ = [
     "Aggregate",
@@ -37,6 +41,7 @@ __all__ = [
     "ScoreCard",
     "bootstrap_ci",
     "repeat_variance",
+    "score_run",
     "summarize",
 ]
 
@@ -173,6 +178,50 @@ class ScoreCard:
         producing checks would otherwise turn the suite green by going silent.
         """
         return self.gateable > 0 and self.passed == self.gateable
+
+
+async def score_run(
+    run: Run,
+    evaluators: Sequence[Callable[..., Any]],
+    *,
+    concurrency: int = 8,
+    include_failed: bool = True,
+) -> list[Score]:
+    """Apply every evaluator to every result, merging components per example.
+
+    Accepts sync and async evaluators in the same list. Most scoring is pure local
+    computation and should not be forced into a coroutine, but a judge is network
+    I/O and would serialise a large run into an afternoon if it were not concurrent.
+    Detecting the difference here keeps that off the caller.
+
+    A failed result still produces a Score, carrying an ``error`` component that is
+    **not applicable** rather than zero. Scoring an API timeout as a wrong answer
+    silently converts an infrastructure problem into a quality regression — which is
+    exactly the class of lie this package exists to refuse. Pass
+    ``include_failed=False`` to drop them instead, but know that a shrinking
+    denominator is then the only trace left.
+    """
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def score_one(result: Any) -> Score:
+        if not result.ok:
+            return Score.from_components(
+                [Component("error", None, detail=repr(result.error))],
+                detail={"error": repr(result.error)},
+            )
+        components: list[Component] = []
+        detail: dict[str, Any] = {}
+        for evaluator in evaluators:
+            outcome = evaluator(result.example, result.output)
+            if inspect.isawaitable(outcome):
+                async with semaphore:
+                    outcome = await outcome
+            components.extend(outcome.components)
+            detail.update(outcome.detail)
+        return Score.from_components(components, detail=detail)
+
+    results = [r for r in run.results if include_failed or r.ok]
+    return list(await asyncio.gather(*(score_one(r) for r in results)))
 
 
 def summarize(

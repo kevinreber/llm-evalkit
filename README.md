@@ -144,8 +144,8 @@ evalkit datasets evals/extraction/cases
 |---|---|---|
 | 1 | `dataset.py`, `runner.py`, `tasks.py` | done |
 | 2 | evaluator protocol + `Score`, **bootstrap confidence intervals**, aggregation | done |
-| 2 (cont.) | exact / regex / LLM-judge / embedding evaluators, judge position-bias measurement | next |
-| 1 (cont.) | retry with backoff on 429/5xx, pre-flight cost estimation with confirm-on-threshold | |
+| 2 (cont.) | exact / regex / LLM-judge / embedding evaluators, judge position-bias measurement | done |
+| 1 (cont.) | retry with backoff on 429/5xx, pre-flight cost estimation with confirm-on-threshold | next |
 | 3 | `Store` protocol + SQLite, regression detection, refuse cross-fingerprint comparison | |
 | 4 | W&B runs, `run` / `compare` / `report` / `datasets` CLI, Jinja2 HTML report, PyPI `0.1.0` | |
 
@@ -162,6 +162,28 @@ That is not hypothetical here. Running Navi's real 25-case extraction suite thro
 ```
 
 The interval is **8.3 percentage points wide**. So the 88.1% recorded a month earlier and the 87.7% measured on a different SDK version are not two results — they are the same result twice, and no amount of staring at the decimals would have said so.
+
+### Measured: LLM-judge position bias, and why the usual measurement is wrong
+
+The standard advice is to measure a judge's position bias by presenting each pair as (A, B) and again as (B, A), then counting flips. Run against **claude-sonnet-5** on 16 deliberately near-tied pairs, that gave:
+
+```
+  DISAGREEMENT RATE           25.0%      <- first run
+  DISAGREEMENT RATE            0.0%      <- second run, identical experiment
+```
+
+The same experiment produced 25% and then 0%. Neither number means anything, and the reason is the control almost nobody runs — judging the **same pair in the same order twice**:
+
+```
+  CONTROL: same order twice   31.2%      <- nondeterminism floor
+  excess attributable to slot     ~0%
+```
+
+The judge disagrees with *itself* about a third of the time on near-tied pairs. So the swap-disagreement never exceeds the noise floor, and on this judge and these pairs there is **no detectable position bias** — the naive measurement would have reported 25% of one and been wrong.
+
+Which raises the obvious fix, temperature 0. That is no longer available: `anthropic` 1.0.0 removed `temperature` from the typed signature of both `messages.create()` and `messages.parse()`, and the API answers `400 — temperature is deprecated for this model` for newer models including claude-sonnet-5. Routing it through `extra_body` reaches the wire and gets the same 400.
+
+So `measure_position_bias()` runs the control **by default**, `PositionBias.excess_over_noise` is the number to read, and an uncontrolled measurement prints `UNCONTROLLED — not interpretable on its own` rather than a figure someone might quote. A measurement that looks rigorous while being confounded is worse than no measurement.
 
 ### Known limitation: usage is invisible through a wrapped task
 
