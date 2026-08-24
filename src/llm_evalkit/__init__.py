@@ -18,8 +18,25 @@ from .dataset import (
     load_jsonl,
 )
 from .evaluators.base import Component, Evaluator, Score, check
+from .evaluators.embedding import embedding_similarity
+from .evaluators.exact import exact_match, normalized_match, set_f1, set_overlap
+from .evaluators.llm_judge import (
+    PositionBias,
+    grading_judge,
+    instructor_caller,
+    measure_position_bias,
+)
+from .evaluators.regex import must_not_match, pattern_match, patterns_from_expected
 from .runner import Metered, Run, RunResult, Task, Usage, run
-from .scorer import Aggregate, Interval, ScoreCard, bootstrap_ci, repeat_variance, summarize
+from .scorer import (
+    Aggregate,
+    Interval,
+    ScoreCard,
+    bootstrap_ci,
+    repeat_variance,
+    score_run,
+    summarize,
+)
 from .tasks import ModelPricing, anthropic_task
 
 __version__ = "0.1.0.dev0"
@@ -35,6 +52,7 @@ __all__ = [
     "Interval",
     "Metered",
     "ModelPricing",
+    "PositionBias",
     "Run",
     "RunResult",
     "Score",
@@ -46,10 +64,22 @@ __all__ = [
     "bootstrap_ci",
     "check",
     "default_adapter",
+    "embedding_similarity",
+    "exact_match",
     "fingerprint",
+    "grading_judge",
+    "instructor_caller",
     "load_dir",
     "load_jsonl",
+    "measure_position_bias",
+    "must_not_match",
+    "normalized_match",
+    "pattern_match",
+    "patterns_from_expected",
     "repeat_variance",
     "run",
+    "score_run",
+    "set_f1",
+    "set_overlap",
     "summarize",
 ]
